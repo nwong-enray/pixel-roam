@@ -3,7 +3,7 @@
 A single-file HTML demo of an autonomous pixel performing a random walk on a flat canvas.
 
 ## What it does
-- Yellow pixel wanders around a 640×420 canvas using heading-drift random walk (tiny random nudge to angle each frame + momentum).
+- Yellow pixel wanders around a 1024×768 tablet-sized canvas (responsive — scales to viewport) using heading-drift random walk (tiny random nudge to angle each frame + momentum).
 - Soft wall reflection keeps it inside the area.
 - Fading blue trail shows the last ~180 steps.
 - HUD displays live position + heading, with a `reset` button.
