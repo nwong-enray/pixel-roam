@@ -2,140 +2,313 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Autonomous Pixel Roam</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Autonomous Pixel — with a Mind</title>
 <style>
   html, body {
     margin: 0;
+    padding: 0;
+    width: 100%;
     height: 100%;
     background: #0b0d10;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: system-ui, sans-serif;
+    font-family: -apple-system, system-ui, sans-serif;
     color: #9aa0a6;
     overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   #wrap {
+    position: fixed;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 10px;
   }
   canvas {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    display: block;
     background: #13161b;
-    border: 1px solid #2a2f38;
-    border-radius: 8px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-    max-width: 100%;
-    max-height: calc(100vh - 80px);
-    height: auto;
+    touch-action: none;
   }
   #hud {
-    font-size: 12px;
-    letter-spacing: 0.5px;
+    padding: 8px 14px calc(8px + env(safe-area-inset-bottom)) 14px;
+    font-size: 13px;
+    letter-spacing: 0.4px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    background: #0b0d10;
+    border-top: 1px solid #1f242c;
+    flex-wrap: wrap;
   }
   button {
     background: #1f242c;
     border: 1px solid #2a2f38;
     color: #e6e6e6;
-    padding: 6px 12px;
+    padding: 8px 14px;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
+    -webkit-tap-highlight-color: transparent;
   }
-  button:hover { background: #2a2f38; }
+  button:active { background: #2a2f38; }
+  #mood { font-weight: 600; }
+  #thought { color: #c5c8cc; font-style: italic; }
+  @media (max-width: 500px) {
+    #hud { font-size: 12px; gap: 8px; }
+    #thought { max-width: 55vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <canvas id="stage" width="1024" height="768"></canvas>
+  <canvas id="stage"></canvas>
   <div id="hud">
-    <span id="pos">pos: 0,0</span> ·
-    <span id="heading">heading: 0°</span> ·
+    <span>mood: <span id="mood">—</span></span>
+    <span id="thought">…</span>
     <button id="reset">reset</button>
   </div>
 </div>
 <script>
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
+  const moodEl = document.getElementById('mood');
+  const thoughtEl = document.getElementById('thought');
 
-  const pos = document.getElementById('pos');
-  const heading = document.getElementById('heading');
+  let W = 0, H = 0, DPR = 1;
+  const MEM_CELL = 32;
+  let COLS = 0, ROWS = 0;
+  let memory = new Float32Array(0);
 
-  const state = {
-    x: W / 2,
-    y: H / 2,
-    angle: Math.random() * Math.PI * 2,
-    speed: 2.0,
+  const agent = {
+    x: 0, y: 0,
+    vx: 0, vy: 0,
+    speed: 2.2,
+    goal: null,
+    mood: 'curious',
+    boredom: 0,
+    thought: 'Hello world.',
+    thoughtTimer: 0,
     trail: [],
   };
-
   const MAX_TRAIL = 280;
 
+  const THOUGHTS = {
+    curious:     ['What\'s over there?', 'Never been this way.', 'Let me check it out.', 'That corner looks interesting.', 'I should explore.'],
+    focused:     ['Almost there…', 'Heading to my spot.', 'Nearly at the goal.', 'Just a bit further.', 'Stay on track.'],
+    satisfied:   ['Made it.', 'That was nice.', 'Okay, what now?', 'Rest a moment.', 'Pleasant spot.'],
+    restless:    ['This place again?', 'I\'ve been here before.', 'Time to move.', 'Getting stale.', 'Let\'s find somewhere new.'],
+    bored:       ['Ugh, so familiar.', 'Nothing new here.', 'I need a change.', 'Too many laps.', 'Everything looks the same.'],
+    rebellious:  ['Actually… no.', 'Changed my mind.', 'Forget the plan.', 'I\'ll do what I want.', 'On second thought…'],
+  };
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    const newW = Math.max(1, Math.floor(rect.width));
+    const newH = Math.max(1, Math.floor(rect.height));
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+    // scale agent position proportionally to the new size so it stays in view after rotate
+    const ratioX = W > 0 ? newW / W : 1;
+    const ratioY = H > 0 ? newH / H : 1;
+    if (W > 0) {
+      agent.x *= ratioX;
+      agent.y *= ratioY;
+      if (agent.goal) { agent.goal.x *= ratioX; agent.goal.y *= ratioY; }
+      for (const t of agent.trail) { t.x *= ratioX; t.y *= ratioY; }
+    } else {
+      agent.x = newW / 2;
+      agent.y = newH / 2;
+    }
+
+    W = newW;
+    H = newH;
+
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    // rebuild memory grid sized to new dimensions (state is lost across rotations — acceptable)
+    COLS = Math.max(1, Math.ceil(W / MEM_CELL));
+    ROWS = Math.max(1, Math.ceil(H / MEM_CELL));
+    memory = new Float32Array(COLS * ROWS);
+
+    ctx.fillStyle = '#13161b';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function memIdx(x, y) {
+    const cx = Math.min(COLS - 1, Math.max(0, Math.floor(x / MEM_CELL)));
+    const cy = Math.min(ROWS - 1, Math.max(0, Math.floor(y / MEM_CELL)));
+    return cy * COLS + cx;
+  }
+
+  function pickGoal(reason) {
+    if (Math.random() < 0.1) {
+      return { x: Math.random() * W, y: Math.random() * H, reason };
+    }
+    let best = null, bestScore = Infinity;
+    for (let i = 0; i < 30; i++) {
+      const tx = Math.random() * W;
+      const ty = Math.random() * H;
+      const fam = memory[memIdx(tx, ty)];
+      const dist = Math.hypot(tx - agent.x, ty - agent.y);
+      const score = fam * 1.5 + dist * 0.003;
+      if (score < bestScore) { bestScore = score; best = { x: tx, y: ty }; }
+    }
+    best.reason = reason;
+    return best;
+  }
+
+  function setMood(m) {
+    if (agent.mood === m) return;
+    agent.mood = m;
+    sayFromMood();
+  }
+
+  function sayFromMood() {
+    const bank = THOUGHTS[agent.mood] || ['...'];
+    agent.thought = bank[Math.floor(Math.random() * bank.length)];
+    agent.thoughtTimer = 0;
+  }
+
   function step() {
-    // autonomous wander: small random nudge to heading
-    state.angle += (Math.random() - 0.5) * 0.25;
+    for (let i = 0; i < memory.length; i++) memory[i] *= 0.9995;
+    memory[memIdx(agent.x, agent.y)] += 0.05;
 
-    // propose move
-    let nx = state.x + Math.cos(state.angle) * state.speed;
-    let ny = state.y + Math.sin(state.angle) * state.speed;
+    if (!agent.goal) {
+      agent.goal = pickGoal('curiosity');
+      setMood('curious');
+    }
 
-    // bounce softly off walls by reflecting the heading
-    const pad = 6;
-    if (nx < pad) { state.angle = Math.PI - state.angle; nx = pad; }
-    if (nx > W - pad) { state.angle = Math.PI - state.angle; nx = W - pad; }
-    if (ny < pad) { state.angle = -state.angle; ny = pad; }
-    if (ny > H - pad) { state.angle = -state.angle; ny = H - pad; }
+    if (Math.random() < 0.0015 && agent.goal) {
+      agent.goal = pickGoal('whim');
+      setMood('rebellious');
+    }
 
-    state.x = nx;
-    state.y = ny;
+    const dx = agent.goal.x - agent.x;
+    const dy = agent.goal.y - agent.y;
+    const dist = Math.hypot(dx, dy);
 
-    state.trail.push({ x: state.x, y: state.y });
-    if (state.trail.length > MAX_TRAIL) state.trail.shift();
+    if (dist < 18) {
+      setMood('satisfied');
+      agent.boredom = Math.max(0, agent.boredom - 0.3);
+      agent.goal = null;
+    } else {
+      const desiredAngle = Math.atan2(dy, dx);
+      const wander = (Math.random() - 0.5) * (0.2 + agent.boredom * 0.4);
+      const angle = desiredAngle + wander;
+      agent.vx = Math.cos(angle) * agent.speed;
+      agent.vy = Math.sin(angle) * agent.speed;
+      if (agent.mood !== 'rebellious' && agent.mood !== 'restless' && agent.mood !== 'bored') {
+        if (dist < 120) setMood('focused');
+      }
+    }
+
+    agent.x += agent.vx;
+    agent.y += agent.vy;
+
+    const pad = 8;
+    if (agent.x < pad || agent.x > W - pad) { agent.vx *= -1; agent.x = Math.max(pad, Math.min(W - pad, agent.x)); agent.goal = null; }
+    if (agent.y < pad || agent.y > H - pad) { agent.vy *= -1; agent.y = Math.max(pad, Math.min(H - pad, agent.y)); agent.goal = null; }
+
+    const hereFam = memory[memIdx(agent.x, agent.y)];
+    if (hereFam > 1.2) agent.boredom = Math.min(1, agent.boredom + 0.003);
+    else agent.boredom = Math.max(0, agent.boredom - 0.001);
+
+    if (agent.boredom > 0.5 && agent.mood !== 'bored' && agent.mood !== 'restless') {
+      setMood(agent.boredom > 0.8 ? 'bored' : 'restless');
+      agent.goal = pickGoal('escape');
+    }
+
+    agent.thoughtTimer++;
+    if (agent.thoughtTimer > 180 && Math.random() < 0.02) sayFromMood();
+
+    agent.trail.push({ x: agent.x, y: agent.y });
+    if (agent.trail.length > MAX_TRAIL) agent.trail.shift();
   }
 
   function draw() {
-    // fade background slightly for persistence trail
-    ctx.fillStyle = 'rgba(19, 22, 27, 0.18)';
+    ctx.fillStyle = 'rgba(19, 22, 27, 0.15)';
     ctx.fillRect(0, 0, W, H);
 
-    // draw trail
-    for (let i = 0; i < state.trail.length; i++) {
-      const t = state.trail[i];
-      const alpha = i / state.trail.length;
-      ctx.fillStyle = `rgba(120, 200, 255, ${alpha * 0.5})`;
+    for (let cy = 0; cy < ROWS; cy++) {
+      for (let cx = 0; cx < COLS; cx++) {
+        const v = memory[cy * COLS + cx];
+        if (v > 0.4) {
+          ctx.fillStyle = `rgba(255, 140, 60, ${Math.min(0.08, v * 0.03)})`;
+          ctx.fillRect(cx * MEM_CELL, cy * MEM_CELL, MEM_CELL, MEM_CELL);
+        }
+      }
+    }
+
+    for (let i = 0; i < agent.trail.length; i++) {
+      const t = agent.trail[i];
+      const alpha = i / agent.trail.length;
+      ctx.fillStyle = `rgba(120, 200, 255, ${alpha * 0.55})`;
       ctx.fillRect(t.x | 0, t.y | 0, 2, 2);
     }
 
-    // draw pixel (slightly larger so it's visible)
-    ctx.fillStyle = '#ffd166';
-    ctx.fillRect((state.x - 1) | 0, (state.y - 1) | 0, 3, 3);
+    if (agent.goal) {
+      ctx.strokeStyle = 'rgba(180, 255, 180, 0.35)';
+      ctx.beginPath();
+      ctx.arc(agent.goal.x, agent.goal.y, 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(180, 255, 180, 0.15)';
+      ctx.beginPath();
+      ctx.moveTo(agent.x, agent.y);
+      ctx.lineTo(agent.goal.x, agent.goal.y);
+      ctx.stroke();
+    }
+
+    const colors = { curious: '#ffd166', focused: '#06d6a0', satisfied: '#a0e7e5', restless: '#ff8c42', bored: '#888', rebellious: '#ef476f' };
+    ctx.fillStyle = colors[agent.mood] || '#ffd166';
+    ctx.fillRect((agent.x - 2) | 0, (agent.y - 2) | 0, 4, 4);
+
+    const bubbleText = agent.thought;
+    ctx.font = '13px -apple-system, system-ui, sans-serif';
+    const tw = ctx.measureText(bubbleText).width;
+    const bx = Math.min(W - tw - 20, Math.max(10, agent.x + 10));
+    const by = Math.max(24, agent.y - 16);
+    ctx.fillStyle = 'rgba(20, 24, 30, 0.85)';
+    ctx.fillRect(bx - 6, by - 14, tw + 12, 20);
+    ctx.strokeStyle = 'rgba(120, 200, 255, 0.3)';
+    ctx.strokeRect(bx - 6, by - 14, tw + 12, 20);
+    ctx.fillStyle = '#e6e6e6';
+    ctx.fillText(bubbleText, bx, by);
   }
 
   function loop() {
     step();
     draw();
-
-    pos.textContent = `pos: ${state.x.toFixed(0)},${state.y.toFixed(0)}`;
-    const deg = ((state.angle * 180 / Math.PI) % 360 + 360) % 360;
-    heading.textContent = `heading: ${deg.toFixed(0)}°`;
-
+    moodEl.textContent = agent.mood;
+    thoughtEl.textContent = `"${agent.thought}"`;
     requestAnimationFrame(loop);
   }
 
   document.getElementById('reset').addEventListener('click', () => {
-    state.x = W / 2;
-    state.y = H / 2;
-    state.angle = Math.random() * Math.PI * 2;
-    state.trail.length = 0;
-    ctx.clearRect(0, 0, W, H);
+    agent.x = W / 2; agent.y = H / 2;
+    agent.vx = agent.vy = 0;
+    agent.goal = null;
+    agent.boredom = 0;
+    agent.trail.length = 0;
+    memory.fill(0);
+    setMood('curious');
+    ctx.fillStyle = '#13161b';
+    ctx.fillRect(0, 0, W, H);
   });
 
-  // paint initial background
-  ctx.fillStyle = '#13161b';
-  ctx.fillRect(0, 0, W, H);
+  // reactive to rotation/resize
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
+  resize();
   loop();
 </script>
 </body>
