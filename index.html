@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Autonomous Pixel Roam</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0b0d10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+    color: #9aa0a6;
+    overflow: hidden;
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  canvas {
+    background: #13161b;
+    border: 1px solid #2a2f38;
+    border-radius: 8px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  #hud {
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+  button {
+    background: #1f242c;
+    border: 1px solid #2a2f38;
+    color: #e6e6e6;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  button:hover { background: #2a2f38; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="stage" width="640" height="420"></canvas>
+  <div id="hud">
+    <span id="pos">pos: 0,0</span> ·
+    <span id="heading">heading: 0°</span> ·
+    <button id="reset">reset</button>
+  </div>
+</div>
+<script>
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const pos = document.getElementById('pos');
+  const heading = document.getElementById('heading');
+
+  const state = {
+    x: W / 2,
+    y: H / 2,
+    angle: Math.random() * Math.PI * 2,
+    speed: 1.4,
+    trail: [],
+  };
+
+  const MAX_TRAIL = 180;
+
+  function step() {
+    // autonomous wander: small random nudge to heading
+    state.angle += (Math.random() - 0.5) * 0.25;
+
+    // propose move
+    let nx = state.x + Math.cos(state.angle) * state.speed;
+    let ny = state.y + Math.sin(state.angle) * state.speed;
+
+    // bounce softly off walls by reflecting the heading
+    const pad = 6;
+    if (nx < pad) { state.angle = Math.PI - state.angle; nx = pad; }
+    if (nx > W - pad) { state.angle = Math.PI - state.angle; nx = W - pad; }
+    if (ny < pad) { state.angle = -state.angle; ny = pad; }
+    if (ny > H - pad) { state.angle = -state.angle; ny = H - pad; }
+
+    state.x = nx;
+    state.y = ny;
+
+    state.trail.push({ x: state.x, y: state.y });
+    if (state.trail.length > MAX_TRAIL) state.trail.shift();
+  }
+
+  function draw() {
+    // fade background slightly for persistence trail
+    ctx.fillStyle = 'rgba(19, 22, 27, 0.18)';
+    ctx.fillRect(0, 0, W, H);
+
+    // draw trail
+    for (let i = 0; i < state.trail.length; i++) {
+      const t = state.trail[i];
+      const alpha = i / state.trail.length;
+      ctx.fillStyle = `rgba(120, 200, 255, ${alpha * 0.5})`;
+      ctx.fillRect(t.x | 0, t.y | 0, 2, 2);
+    }
+
+    // draw pixel (slightly larger so it's visible)
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect((state.x - 1) | 0, (state.y - 1) | 0, 3, 3);
+  }
+
+  function loop() {
+    step();
+    draw();
+
+    pos.textContent = `pos: ${state.x.toFixed(0)},${state.y.toFixed(0)}`;
+    const deg = ((state.angle * 180 / Math.PI) % 360 + 360) % 360;
+    heading.textContent = `heading: ${deg.toFixed(0)}°`;
+
+    requestAnimationFrame(loop);
+  }
+
+  document.getElementById('reset').addEventListener('click', () => {
+    state.x = W / 2;
+    state.y = H / 2;
+    state.angle = Math.random() * Math.PI * 2;
+    state.trail.length = 0;
+    ctx.clearRect(0, 0, W, H);
+  });
+
+  // paint initial background
+  ctx.fillStyle = '#13161b';
+  ctx.fillRect(0, 0, W, H);
+
+  loop();
+</script>
+</body>
+</html>
